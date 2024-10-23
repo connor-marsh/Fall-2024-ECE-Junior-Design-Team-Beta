@@ -37,4 +37,5 @@ void loop() {
   digitalWrite(8, LOW);    // Turn LED 1 OFF
 
  /*Olivia Sobek
-   Connor Marsh*/
+   Connor Marsh
+   Will Muckelroy III*/
