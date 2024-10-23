@@ -36,4 +36,5 @@ void loop() {
   delay(1000);             // Wait for 1 second
   digitalWrite(8, LOW);    // Turn LED 1 OFF
 
- /*Olivia Sobek*/
+ /*Olivia Sobek
+   Connor Marsh*/
