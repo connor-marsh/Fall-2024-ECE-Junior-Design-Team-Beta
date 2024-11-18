@@ -1,11 +1,12 @@
 // INCLUDES
-#include <Wire.h>             // For I2C communication devices
-#include <SPI.h>              // For SPI communication devices
-#include <Adafruit_GFX.h>     // For graphics on OLED
-#include <Adafruit_SSD1306.h> // For the OLED itself
-#include <FastLED.h>          // For the LED Light Strip
-#include <FastIMU.h>          // For Grabbing IMU data off I2C
-#include "mp3tf16p.h"         // For the DFPlayer
+#include <Wire.h>                 // For I2C communication devices
+#include <SPI.h>                  // For SPI communication devices
+#include <Adafruit_GFX.h>         // For graphics on OLED
+#include <Adafruit_SSD1306.h>     // For the OLED itself
+#include <FastLED.h>              // For the LED Light Strip
+#include <FastIMU.h>              // For Grabbing IMU data off I2C
+#include <SoftwareSerial.h>       // For RX / TX
+#include <DFRobotDFPlayerMini.h>  // For DF Player
 
 // COLOR DEFINITIONS
 // #define WHITE_25 0x202020
@@ -52,7 +53,10 @@ GyroData g;                   // gyro data
 #define FIREBALL_PIN 4   // SW2
 
 // Initialize DFPlayer
-// MP3Player mp3(10, 11);  // Using the custom MP3Player class
+#define RX 0            // RX Pin
+#define TX 1            // TX Pin
+SoftwareSerial mySerial(RX, TX);
+DFRobotDFPlayerMini player;
 
 // GAME STATES
 enum GameState {

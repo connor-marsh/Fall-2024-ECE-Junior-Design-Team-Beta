@@ -10,7 +10,7 @@
 
 // LED STRIP STUFF (WS2812B)
 // https://randomnerdtutorials.com/guide-for-ws2812b-addressable-rgb-led-strip-with-arduino/
-#define NUM_LEDS 144
+#define NUM_LEDS 258
 #define DATA_PIN 6
 CRGB leds[NUM_LEDS];
 
@@ -177,13 +177,16 @@ void loop() {
   }
   else if (PROGRAM_MODE == "LED_STRIP") {
     // this makes red leds shoot across which is similar to what we would want for the fireball
+
     for (int i = -4; i < NUM_LEDS; i++) {
       for (int j = 0; j < NUM_LEDS; j++) {
         if (j >= i && j < i+5) {
           leds[j] = CRGB::White;
+          leds[NUM_LEDS-j-1] = CRGB::White;
         }
         else {
           leds[j] = CRGB::Black;
+          leds[NUM_LEDS-j-1] = CRGB::Black;
         }
       }
       FastLED.show();
