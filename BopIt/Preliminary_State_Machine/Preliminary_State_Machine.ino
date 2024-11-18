@@ -1,6 +1,8 @@
 // INCLUDES
-#include "Wire.h" // For I2C communication devices
-#include <SPI.h>  // For SPI communication devices
+#include "Wire.h"             // For I2C communication devices
+#include <Adafruit_MPU6050.h> // for IMU
+#include <Adafruit_Sensor.h>  // for IMU
+#include <SPI.h>              // For SPI communication devices
 #include <Adafruit_GFX.h>     // For graphics on OLED
 #include <Adafruit_SSD1306.h> // For the OLED itself
 #include <FastLED.h>          // For the LED Light Strip
@@ -23,11 +25,14 @@ CRGB leds[NUM_LEDS];
 // IMU CONFIGURATION
 const int MPU_ADDR = 0x68;          // I2C address of MPU-6050, if AD0 == HIGH, then ADDR = 0x69
 int16_t* values = (int16_t*) malloc(6 * sizeof(int16_t)); // array for raw IMU data (accel xyz, gyroxyz)
+uint16_t aX, aY, aZ, gX, gY, gZ = 0;
+sensors_event_t a, g, temp;         // accelerometer, gyro, temp sensors
 char tmp_str[7];                    // temp variable used for conversion
 char* int16_to_str(int16_t i) {
   sprintf(tmp_str, "%6d", i);
   return tmp_str;
 }
+Adafruit_MPU6050 mpu;
 
 // PIN DEFINITIONS
 #define POWER_PIN 2      // Toggle switch
@@ -94,6 +99,13 @@ void setup() {
   Wire.write(0x6B);                 // PWR_MGT_1 register
   Wire.write(0);                    // Set to 0 (wakes up the MPU-6050)
   Wire.endTransmission(true);
+  // if (!mpu.begin()) {
+  //   for(;;);  // loop forever
+  // }
+  // mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  // mpu.setGyroRange(MPU6050_RANGE_250_DEG);
+  // mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+  // delay(100);
 }
 
 void updateDisplay() {
@@ -108,15 +120,37 @@ void updateDisplay() {
   else if (currentState == START_BUTTON_STATE) display.println(F("START_BUTTON"));
   else if (currentState == SWING_STATE) display.println(F("SWING")); 
   else display.println(F("INVALID STATE!"));
-  display.print(F("Level: ")); display.println(level);
-  display.print(F("Health: ")); display.println(health);
+  if (currentState != SWING_STATE) {
+    display.print(F("Level: ")); display.println(level);
+    display.print(F("Health: ")); display.println(health);
+  } else {
+    display.setCursor(0, 8);
+    // mpu.getEvent(&a, &g, &temp);
+    display.print(F("aX: "));
+    display.print(int16_to_str(aX));
+
+    display.setCursor(0, 16);
+    display.print(F("aY: "));
+    display.print(int16_to_str(aY));
+
+    display.setCursor(0, 24);
+    display.print(F("aZ: "));
+    display.println(int16_to_str(aZ));
+
+  }
   if (currentState == FIREBALL_STATE) {
     display.println(F("SHOOT FIREBALL!"));
   } else if (currentState == START_BUTTON_STATE) {
     display.println(F("PRESS START BUTTON!"));
   } else if (currentState == SWING_STATE) {
-    display.setCursor(0, 24);
-    display.print(F("Accel X: ")); display.println(int16_to_str(values[0]));
+    // display.setCursor(0, 24);
+    // // mpu.getEvent(&a, &g, &temp);
+    // display.print(F("aX: "));
+    // display.print(int16_to_str(aX));
+    // display.print(F(", aY: "));
+    // display.print(int16_to_str(aY));
+    // display.print(F(", aZ: "));
+    // display.println(int16_to_str(aZ));
   } else {
     display.println(F("NA"));
   }
@@ -153,7 +187,35 @@ void showFailurePattern(CRGB color) {
   }
 }
 
-void getIMUValues() {
+// void getIMUValues() {
+//   // This should print IMU data to Serial every second
+//   Wire.beginTransmission(MPU_ADDR);
+//   Wire.write(0x3B); // starting with register 0x3B (ACCEL_XOUT_H) [MPU-6000 and MPU-6050 Register Map and Descriptions Revision 4.2, p.40]
+//   Wire.endTransmission(false); // the parameter indicates that the Arduino will send a restart. As a result, the connection is kept active.
+//   Wire.requestFrom(MPU_ADDR, 7 * 2, true); // request a total of 7*2=14 registers
+
+//   // "Wire.read()<<8 | Wire.read();" means two registers are read and stored in the same variable
+//   values[0] = Wire.read() << 8 | Wire.read(); // reading registers: 0x3B (ACCEL_XOUT_H) and 0x3C (ACCEL_XOUT_L)
+//   values[1] = Wire.read() << 8 | Wire.read(); // reading registers: 0x3D (ACCEL_YOUT_H) and 0x3E (ACCEL_YOUT_L)
+//   values[2] = Wire.read() << 8 | Wire.read(); // reading registers: 0x3F (ACCEL_ZOUT_H) and 0x40 (ACCEL_ZOUT_L)
+//   values[3] = Wire.read() << 8 | Wire.read();  // reading registers: 0x43 (GYRO_XOUT_H) and 0x44 (GYRO_XOUT_L)
+//   values[4] = Wire.read() << 8 | Wire.read();  // reading registers: 0x45 (GYRO_YOUT_H) and 0x46 (GYRO_YOUT_L)
+//   values[5] = Wire.read() << 8 | Wire.read();  // reading registers: 0x47 (GYRO_ZOUT_H) and 0x48 (GYRO_ZOUT_L)
+//   // The values being cast to int16_t are the offsets from the IMU default values
+//   // (Idea is when IMU is at rest everything should be 0's)
+//   values[0] -= int16_t(1350);
+//   values[1] -= int16_t(-50);
+//   values[2] -= int16_t(16650);
+//   values[3] -= int16_t(-60);
+//   values[4] -= int16_t(-20);
+//   values[5] -= int16_t(-180);
+
+//   Wire.endTransmission(true);
+// }
+
+void loop() {
+  // start event timers
+  unsigned long currentTime = millis();
   // This should print IMU data to Serial every second
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(0x3B); // starting with register 0x3B (ACCEL_XOUT_H) [MPU-6000 and MPU-6050 Register Map and Descriptions Revision 4.2, p.40]
@@ -161,27 +223,20 @@ void getIMUValues() {
   Wire.requestFrom(MPU_ADDR, 7 * 2, true); // request a total of 7*2=14 registers
 
   // "Wire.read()<<8 | Wire.read();" means two registers are read and stored in the same variable
-  values[0] = Wire.read() << 8 | Wire.read(); // reading registers: 0x3B (ACCEL_XOUT_H) and 0x3C (ACCEL_XOUT_L)
-  values[1] = Wire.read() << 8 | Wire.read(); // reading registers: 0x3D (ACCEL_YOUT_H) and 0x3E (ACCEL_YOUT_L)
-  values[2] = Wire.read() << 8 | Wire.read(); // reading registers: 0x3F (ACCEL_ZOUT_H) and 0x40 (ACCEL_ZOUT_L)
-  values[3] = Wire.read() << 8 | Wire.read();  // reading registers: 0x43 (GYRO_XOUT_H) and 0x44 (GYRO_XOUT_L)
-  values[4] = Wire.read() << 8 | Wire.read();  // reading registers: 0x45 (GYRO_YOUT_H) and 0x46 (GYRO_YOUT_L)
-  values[5] = Wire.read() << 8 | Wire.read();  // reading registers: 0x47 (GYRO_ZOUT_H) and 0x48 (GYRO_ZOUT_L)
+  aX = Wire.read() << 8 | Wire.read(); // reading registers: 0x3B (ACCEL_XOUT_H) and 0x3C (ACCEL_XOUT_L)
+  aY = Wire.read() << 8 | Wire.read(); // reading registers: 0x3D (ACCEL_YOUT_H) and 0x3E (ACCEL_YOUT_L)
+  aZ = Wire.read() << 8 | Wire.read(); // reading registers: 0x3F (ACCEL_ZOUT_H) and 0x40 (ACCEL_ZOUT_L)
+  gX = Wire.read() << 8 | Wire.read();  // reading registers: 0x43 (GYRO_XOUT_H) and 0x44 (GYRO_XOUT_L)
+  gY = Wire.read() << 8 | Wire.read();  // reading registers: 0x45 (GYRO_YOUT_H) and 0x46 (GYRO_YOUT_L)
+  gZ = Wire.read() << 8 | Wire.read();  // reading registers: 0x47 (GYRO_ZOUT_H) and 0x48 (GYRO_ZOUT_L)
   // The values being cast to int16_t are the offsets from the IMU default values
   // (Idea is when IMU is at rest everything should be 0's)
-  values[0] -= int16_t(1350);
-  values[1] -= int16_t(-50);
-  values[2] -= int16_t(16650);
-  values[3] -= int16_t(-60);
-  values[4] -= int16_t(-20);
-  values[5] -= int16_t(-180);
-
-  Wire.endTransmission(true);
-}
-
-void loop() {
-  // start event timers
-  unsigned long currentTime = millis();
+  aX -= int16_t(1350);
+  aY -= int16_t(-50);
+  aZ -= int16_t(16650);
+  gX -= int16_t(-60);
+  gY -= int16_t(-20);
+  gZ -= int16_t(-180);
 
   if (currentTime - prev_currentTime >= STATE_POLLING_TIME) {
     // Check power toggle at all times
@@ -216,21 +271,9 @@ void loop() {
       if (random(2) == 0) {
         currentState = FIREBALL_STATE;
         // mp3.playTrackNumber(2, 30);  // Play fireball prompt
-        // display.clearDisplay();
-        // display.setTextSize(1);
-        // display.setTextColor(SSD1306_WHITE);
-        // display.setCursor(0, 0);
-        // display.println(F("SHOOT FIREBALL!"));
-        // display.display();
       } else {
         currentState = START_BUTTON_STATE;
         // mp3.playTrackNumber(3, 30);  // Play start button prompt
-        // display.clearDisplay();
-        // display.setTextSize(1);
-        // display.setTextColor(SSD1306_WHITE);
-        // display.setCursor(0, 0);
-        // display.println(F("HIT START BUTTON!"));
-        // display.display();
       }
       ACTION_SUCCESS = false;
       actionTime = millis();  // Start the timer
