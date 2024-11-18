@@ -1,21 +1,23 @@
 // INCLUDES
-#include "Wire.h"             // For I2C communication devices
-#include <Adafruit_MPU6050.h> // for IMU
-#include <Adafruit_Sensor.h>  // for IMU
+#include <Wire.h>             // For I2C communication devices
 #include <SPI.h>              // For SPI communication devices
 #include <Adafruit_GFX.h>     // For graphics on OLED
 #include <Adafruit_SSD1306.h> // For the OLED itself
 #include <FastLED.h>          // For the LED Light Strip
+#include <FastIMU.h>          // For Grabbing IMU data off I2C
 #include "mp3tf16p.h"         // For the DFPlayer
 
 // OLED CONFIGURATION
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 32
-#define OLED_MOSI  11    // SPI MOSI
-#define OLED_CLK   13    // SPI SCK
-#define OLED_DC    8     // Data/Command
-#define OLED_CS    10    // Chip Select
-#define OLED_RESET 9     // Reset
+#define OLED_RESET -1
+#define OLED_MOSI  11     // SPI MOSI
+#define OLED_CLK   13     // SPI SCK
+#define OLED_DC    8      // Data/Command
+#define OLED_CS    10     // Chip Select
+#define OLED_RESET 9      // Reset (-1 if sharing arduino reset pin)
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT,
+  OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
 
 // LED STRIP CONFIGURATION
 #define NUM_LEDS 144
@@ -23,26 +25,25 @@
 CRGB leds[NUM_LEDS];
 
 // IMU CONFIGURATION
-const int MPU_ADDR = 0x68;          // I2C address of MPU-6050, if AD0 == HIGH, then ADDR = 0x69
-int16_t* values = (int16_t*) malloc(6 * sizeof(int16_t)); // array for raw IMU data (accel xyz, gyroxyz)
-uint16_t aX, aY, aZ, gX, gY, gZ = 0;
-sensors_event_t a, g, temp;         // accelerometer, gyro, temp sensors
-char tmp_str[7];                    // temp variable used for conversion
-char* int16_to_str(int16_t i) {
-  sprintf(tmp_str, "%6d", i);
-  return tmp_str;
-}
-Adafruit_MPU6050 mpu;
+#define IMU_ADDRESS 0x68
+MPU6050 imu;
+const calData calibrationData = {
+    true,                     // valid flag
+    {0.091, 0.001, 0.006},    // accelBias
+    {-0.313, -0.412, -1.443}, // gyroBias
+    {0.0, 0.0, 0.0},          // magBias (unused for MPU6050)
+    {1.0, 1.0, 1.0}           // magScale (unused for MPU6050)
+};
+AccelData a;                  // accelerometer data
+GyroData g;                   // gyro data
 
 // PIN DEFINITIONS
 #define POWER_PIN 2      // Toggle switch
-#define START_PIN 4
-#define FIREBALL_PIN 7
+#define START_PIN 7      // SW1 
+#define FIREBALL_PIN 4   // SW2
 
-// Initialize Objects
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT,
-  OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
-MP3Player mp3(10, 11);  // Using the custom MP3Player class
+// Initialize DFPlayer
+// MP3Player mp3(10, 11);  // Using the custom MP3Player class
 
 // GAME STATES
 enum GameState {
@@ -50,8 +51,8 @@ enum GameState {
   START_STATE,
   ACTION_SELECT_STATE,
   FIREBALL_STATE,
-  START_BUTTON_STATE,
-  SWING_STATE
+  SWING_STATE,
+  THRUST_STATE,
 };
 
 // GAME VARIABLES
@@ -59,14 +60,24 @@ GameState currentState = SWING_STATE;
 int health = 3;
 int level = 0;
 unsigned long actionTime = 0;
-unsigned long prev_imuTime = 0;
 unsigned long prev_currentTime = 0;
-const unsigned long ACTION_TIMEOUT = 5000; // 5 seconds in milliseconds
-bool ACTION_SUCCESS = false;
-const unsigned long IMU_POLLING_TIME = 250;
-const unsigned long STATE_POLLING_TIME = 100;
+const unsigned long ACTION_TIMEOUT = 5000;    // 5 seconds in milliseconds
+const unsigned long STATE_POLLING_TIME = 100; // Poll every 0.01 seconds
+bool ACTION_SUCCESS = false;                  // Whether seelected action was performed
+float SWING_THRESHOLD = 2.5;                  // aZ
+float THRUST_THRESHOLD = 1.5;                 // aY
+float ORIENT_THRESHOLD = 30;                  // gX/gY/gZ
 
 void setup() {
+  // Initialize Serial for debugging
+  Serial.begin(9600);
+  while (!Serial) {
+    delay(10);  // wait for serial port to connect
+  }
+  
+  //Initialize I2C
+  Wire.begin();
+  
   // Initialize pins
   pinMode(POWER_PIN, INPUT);
   pinMode(START_PIN, INPUT);
@@ -76,84 +87,88 @@ void setup() {
   FastLED.addLeds<WS2812B, DATA_PIN, RGB>(leds, NUM_LEDS);
   FastLED.clear();
   FastLED.show();
-  
-  // Initialize Serial for debugging
-  Serial.begin(9600);
-  
+
   // Initialize MP3 player
   // mp3.initialize();
   
-  // Initialize display with SPI
+  // Initialize OLED display with SPI
   if(!display.begin(SSD1306_SWITCHCAPVCC)) {
     Serial.println(F("SSD1306 allocation failed"));
     for(;;); // Don't proceed, loop forever
-  }  
+  }
   display.clearDisplay();
-  display.display();
-  // Set text properties for display
+  display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0,0);
+  display.println(F("Initializing..."));
+  display.display();
+  delay(2000);
 
-  // Initialize IMU on I2C
-  Wire.begin();
-  Wire.beginTransmission(MPU_ADDR); // Begins transmission to the I2C slave (GY-521 Board)
-  Wire.write(0x6B);                 // PWR_MGT_1 register
-  Wire.write(0);                    // Set to 0 (wakes up the MPU-6050)
-  Wire.endTransmission(true);
-  // if (!mpu.begin()) {
-  //   for(;;);  // loop forever
-  // }
-  // mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
-  // mpu.setGyroRange(MPU6050_RANGE_250_DEG);
-  // mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
-  // delay(100);
+  // Initialize IMU
+  int err = imu.init(calibrationData, IMU_ADDRESS);
+  if (err != 0) {
+    display.clearDisplay();
+    display.setCursor(0,0);
+    display.print(F("IMU Error: "));
+    display.println(err);
+    display.display();
+    Serial.print("IMU Error: "); Serial.println(err);
+    for(;;);
+  }
+
+  // Set Accelerometer Range (after calibration)
+  err = imu.setAccelRange(8); // +/- 8g Range
+  if (err != 0) {
+    display.clearDisplay();
+    display.setCursor(0,0);
+    display.println(F("Accel range err"));
+    display.display();
+    for(;;);
+  }
+
+  display.clearDisplay();
+  display.setCursor(0,0);
+  display.println(F("Setup complete!"));
+  display.display();
+  delay(1000);
 }
 
-void updateDisplay() {
+void updateDisplay(bool threshold, AccelData accel, GyroData gyro) {
   display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
+  
+  // ROW 1 OLED OUTPUT
   display.setCursor(0,0);
   if (currentState == MENU_STATE) display.println(F("MENU"));
   else if (currentState == START_STATE) display.println(F("START"));
   else if (currentState == ACTION_SELECT_STATE) display.println(F("ACTION SELECT"));
-  else if (currentState == FIREBALL_STATE) display.println(F("FIREBALL"));
-  else if (currentState == START_BUTTON_STATE) display.println(F("START_BUTTON"));
-  else if (currentState == SWING_STATE) display.println(F("SWING")); 
+  else if (currentState == FIREBALL_STATE) display.println(F("FIREBALL!"));
+  else if (currentState == THRUST_STATE) display.println(F("THRUST!"));
+  else if (currentState == SWING_STATE) display.println(F("SWING!")); 
   else display.println(F("INVALID STATE!"));
-  if (currentState != SWING_STATE) {
+
+  // ROW 2 + 3 OLED OUTPUT
+  if (currentState != SWING_STATE && currentState != THRUST_STATE && currentState != FIREBALL_STATE) {
     display.print(F("Level: ")); display.println(level);
     display.print(F("Health: ")); display.println(health);
   } else {
-    display.setCursor(0, 8);
-    // mpu.getEvent(&a, &g, &temp);
-    display.print(F("aX: "));
-    display.print(int16_to_str(aX));
+    // DISPLAY IMU DATA
+    // display.setCursor(0, 8);
+    display.print(accel.accelX); display.print(F(", "));
+    display.print(accel.accelZ); display.print(F(", "));
+    display.println(accel.accelZ);
 
-    display.setCursor(0, 16);
-    display.print(F("aY: "));
-    display.print(int16_to_str(aY));
+    // display.setCursor(0, 16);
+    display.print(gyro.gyroX); display.print(F(", "));
+    display.print(gyro.gyroZ); display.print(F(", "));
+    display.println(gyro.gyroZ);
 
-    display.setCursor(0, 24);
-    display.print(F("aZ: "));
-    display.println(int16_to_str(aZ));
-
-  }
-  if (currentState == FIREBALL_STATE) {
-    display.println(F("SHOOT FIREBALL!"));
-  } else if (currentState == START_BUTTON_STATE) {
-    display.println(F("PRESS START BUTTON!"));
-  } else if (currentState == SWING_STATE) {
+    // ROW 4 OUTPUT
     // display.setCursor(0, 24);
-    // // mpu.getEvent(&a, &g, &temp);
-    // display.print(F("aX: "));
-    // display.print(int16_to_str(aX));
-    // display.print(F(", aY: "));
-    // display.print(int16_to_str(aY));
-    // display.print(F(", aZ: "));
-    // display.println(int16_to_str(aZ));
-  } else {
-    display.println(F("NA"));
+    if (threshold) display.println(F("THRESHOLD MET"));
+    else display.println(F("THRESHOLD NOT MET"));
+    delay(5);
   }
+
   display.display();
 }
 
@@ -187,56 +202,23 @@ void showFailurePattern(CRGB color) {
   }
 }
 
-// void getIMUValues() {
-//   // This should print IMU data to Serial every second
-//   Wire.beginTransmission(MPU_ADDR);
-//   Wire.write(0x3B); // starting with register 0x3B (ACCEL_XOUT_H) [MPU-6000 and MPU-6050 Register Map and Descriptions Revision 4.2, p.40]
-//   Wire.endTransmission(false); // the parameter indicates that the Arduino will send a restart. As a result, the connection is kept active.
-//   Wire.requestFrom(MPU_ADDR, 7 * 2, true); // request a total of 7*2=14 registers
-
-//   // "Wire.read()<<8 | Wire.read();" means two registers are read and stored in the same variable
-//   values[0] = Wire.read() << 8 | Wire.read(); // reading registers: 0x3B (ACCEL_XOUT_H) and 0x3C (ACCEL_XOUT_L)
-//   values[1] = Wire.read() << 8 | Wire.read(); // reading registers: 0x3D (ACCEL_YOUT_H) and 0x3E (ACCEL_YOUT_L)
-//   values[2] = Wire.read() << 8 | Wire.read(); // reading registers: 0x3F (ACCEL_ZOUT_H) and 0x40 (ACCEL_ZOUT_L)
-//   values[3] = Wire.read() << 8 | Wire.read();  // reading registers: 0x43 (GYRO_XOUT_H) and 0x44 (GYRO_XOUT_L)
-//   values[4] = Wire.read() << 8 | Wire.read();  // reading registers: 0x45 (GYRO_YOUT_H) and 0x46 (GYRO_YOUT_L)
-//   values[5] = Wire.read() << 8 | Wire.read();  // reading registers: 0x47 (GYRO_ZOUT_H) and 0x48 (GYRO_ZOUT_L)
-//   // The values being cast to int16_t are the offsets from the IMU default values
-//   // (Idea is when IMU is at rest everything should be 0's)
-//   values[0] -= int16_t(1350);
-//   values[1] -= int16_t(-50);
-//   values[2] -= int16_t(16650);
-//   values[3] -= int16_t(-60);
-//   values[4] -= int16_t(-20);
-//   values[5] -= int16_t(-180);
-
-//   Wire.endTransmission(true);
-// }
+bool checkFireballThreshold(GyroData gData) {
+  if (abs(gData.gyroX) < ORIENT_THRESHOLD 
+      && abs(gData.gyroY) < ORIENT_THRESHOLD
+      && abs(gData.gyroZ) < ORIENT_THRESHOLD){
+    return true;
+  } else {
+    return false;
+  }
+}
 
 void loop() {
   // start event timers
   unsigned long currentTime = millis();
-  // This should print IMU data to Serial every second
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(0x3B); // starting with register 0x3B (ACCEL_XOUT_H) [MPU-6000 and MPU-6050 Register Map and Descriptions Revision 4.2, p.40]
-  Wire.endTransmission(false); // the parameter indicates that the Arduino will send a restart. As a result, the connection is kept active.
-  Wire.requestFrom(MPU_ADDR, 7 * 2, true); // request a total of 7*2=14 registers
-
-  // "Wire.read()<<8 | Wire.read();" means two registers are read and stored in the same variable
-  aX = Wire.read() << 8 | Wire.read(); // reading registers: 0x3B (ACCEL_XOUT_H) and 0x3C (ACCEL_XOUT_L)
-  aY = Wire.read() << 8 | Wire.read(); // reading registers: 0x3D (ACCEL_YOUT_H) and 0x3E (ACCEL_YOUT_L)
-  aZ = Wire.read() << 8 | Wire.read(); // reading registers: 0x3F (ACCEL_ZOUT_H) and 0x40 (ACCEL_ZOUT_L)
-  gX = Wire.read() << 8 | Wire.read();  // reading registers: 0x43 (GYRO_XOUT_H) and 0x44 (GYRO_XOUT_L)
-  gY = Wire.read() << 8 | Wire.read();  // reading registers: 0x45 (GYRO_YOUT_H) and 0x46 (GYRO_YOUT_L)
-  gZ = Wire.read() << 8 | Wire.read();  // reading registers: 0x47 (GYRO_ZOUT_H) and 0x48 (GYRO_ZOUT_L)
-  // The values being cast to int16_t are the offsets from the IMU default values
-  // (Idea is when IMU is at rest everything should be 0's)
-  aX -= int16_t(1350);
-  aY -= int16_t(-50);
-  aZ -= int16_t(16650);
-  gX -= int16_t(-60);
-  gY -= int16_t(-20);
-  gZ -= int16_t(-180);
+  bool thresh_met = false;
+  imu.update();
+  imu.getAccel(&a);
+  imu.getGyro(&g);
 
   if (currentTime - prev_currentTime >= STATE_POLLING_TIME) {
     // Check power toggle at all times
@@ -247,7 +229,7 @@ void loop() {
     if (currentState == MENU_STATE) {
       FastLED.clear();
       FastLED.show();
-      updateDisplay();
+      updateDisplay(thresh_met, a, g);
       // mp3.playTrackNumber(0, 30);  // Play menu sound
       while (digitalRead(POWER_PIN) == LOW) {
         delay(100);  // Wait for toggle to be set to HIGH
@@ -257,7 +239,7 @@ void loop() {
     } else if (currentState == START_STATE) {
       health = 3;
       level = 0;
-      updateDisplay();
+      updateDisplay(thresh_met, a, g);
       while(digitalRead(START_PIN) == LOW) {
         // mp3.playTrackNumber(1, 30);  // Play start sound
         delay(100);  // Debounce
@@ -265,29 +247,32 @@ void loop() {
       currentState = ACTION_SELECT_STATE;
 
     } else if (currentState == ACTION_SELECT_STATE) {
-      updateDisplay();
-      delay(1000);
+      updateDisplay(thresh_met, a, g);
+      delay(5000);
+      int action = random(3);
       // Randomly select next action
-      if (random(2) == 0) {
+      if (action == 0) {
         currentState = FIREBALL_STATE;
         // mp3.playTrackNumber(2, 30);  // Play fireball prompt
-      } else {
-        currentState = START_BUTTON_STATE;
+      } else if (action == 1 ){
+        currentState = SWING_STATE;
         // mp3.playTrackNumber(3, 30);  // Play start button prompt
+      } else {
+        currentState = THRUST_STATE;
       }
       ACTION_SUCCESS = false;
       actionTime = millis();  // Start the timer
-      
 
     } else if (currentState == FIREBALL_STATE) {
-      updateDisplay();
+      updateDisplay(thresh_met, a, g);
       while (millis() - actionTime <= ACTION_TIMEOUT) {
         delay(10); // debounce
-        if (digitalRead(FIREBALL_PIN) == HIGH) {
+        if (digitalRead(FIREBALL_PIN) == HIGH && checkFireballThreshold(g)) {
           // mp3.playTrackNumber(4, 30);  // Play success sound
           runLEDAnimation(CRGB::Green);
           level++;
           currentState = ACTION_SELECT_STATE;
+          thresh_met = true;
           ACTION_SUCCESS = true;
           break;
         }
@@ -295,22 +280,24 @@ void loop() {
       // mp3.playTrackNumber(5, 30);  // Play failure sound
       if (!ACTION_SUCCESS) {
         health--;
-        updateDisplay();
+        thresh_met = false;
+        updateDisplay(thresh_met, a, g);
         showFailurePattern(CRGB::Blue);
       }
       // Check for Health Status and advance state
-      if (health <= 0) {currentState = START_STATE;}
-      else {currentState = ACTION_SELECT_STATE;}
+      if (health <= 0) currentState = START_STATE;
+      else currentState = ACTION_SELECT_STATE;
 
-    } else if (currentState == START_BUTTON_STATE) {
-      updateDisplay();
+    } else if (currentState == THRUST_STATE) {
+      updateDisplay(thresh_met, a, g);
       while (millis() - actionTime <= ACTION_TIMEOUT) {
         delay(10);  // Debounce
-        if (digitalRead(START_PIN) == HIGH) {
+        if (abs(a.accelY) > THRUST_THRESHOLD) {
           // mp3.playTrackNumber(4, 30);  // Play success sound
           runLEDAnimation(CRGB::Red);
           level++;
           currentState = ACTION_SELECT_STATE;
+          thresh_met = true;
           ACTION_SUCCESS = true;
           break;
         }
@@ -318,7 +305,8 @@ void loop() {
       // mp3.playTrackNumber(5, 30);  // Play failure sound
       if (!ACTION_SUCCESS) {
         health--;
-        updateDisplay();
+        thresh_met = false;
+        updateDisplay(thresh_met, a, g);
         showFailurePattern(CRGB::Orange);
       }
       // Check for Health Status and advance state
@@ -326,7 +314,9 @@ void loop() {
       else currentState = ACTION_SELECT_STATE;
 
     } else if (currentState == SWING_STATE) {
-      updateDisplay();
+      if (abs(a.accelZ) > SWING_THRESHOLD) thresh_met = true;
+      else thresh_met = false;
+      // updateDisplay(thresh_met, a, g);
       delay(10);
     } else {
       level = 111;
@@ -335,11 +325,4 @@ void loop() {
     }
     prev_currentTime = currentTime;
   }
-
-  // // IMU POLLING
-  // if (currentTime - prev_imuTime >= IMU_POLLING_TIME) {
-  //   level++;
-  //   updateDisplay();
-  // }
-
 }
