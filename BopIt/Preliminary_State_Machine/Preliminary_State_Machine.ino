@@ -7,6 +7,15 @@
 #include <FastIMU.h>          // For Grabbing IMU data off I2C
 #include "mp3tf16p.h"         // For the DFPlayer
 
+// COLOR DEFINITIONS
+// #define WHITE_25 0x202020
+// #define WHITE_50 0x303030
+// #define WHITE_MAX 0xFFFFFF
+// #define RED_50 0x000030
+// #define RED_MAX 0x0000FF
+// #define BLUE_50 0x300000
+// #define BLUE_MAX 0xFF0000
+
 // OLED CONFIGURATION
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 32
@@ -56,7 +65,7 @@ enum GameState {
 };
 
 // GAME VARIABLES
-GameState currentState = SWING_STATE;
+GameState currentState = MENU_STATE;
 int health = 3;
 int level = 0;
 unsigned long actionTime = 0;
@@ -172,11 +181,11 @@ void updateDisplay(bool threshold, AccelData accel, GyroData gyro) {
   display.display();
 }
 
-void runLEDAnimation(CRGB color) {
-  FastLED.clear();
-  for (int i = -4; i < NUM_LEDS; i++) {
+void showSuccessPattern(CRGB color) {
+  const int LED = 20;
+  for (int i = -LED; i < NUM_LEDS; i++) {
     for (int j = 0; j < NUM_LEDS; j++) {
-      if (j >= i && j < i + 5) {
+      if (j >= i && j < i + LED + 1) {
         leds[j] = color;
       } else {
         leds[j] = CRGB::Black;
@@ -187,19 +196,55 @@ void runLEDAnimation(CRGB color) {
   }
 }
 
-void showFailurePattern(CRGB color) {
-  FastLED.clear();
-  for (int i = -4; i < NUM_LEDS; i++) {
-    for (int j = 0; j < NUM_LEDS; j++) {
-      if (j >= i && j < i + 5) {
-        leds[j] = color;
-      } else {
-        leds[j] = CRGB::Black;
-      }
-    }
-    FastLED.show();
-    delay(5);
+void showFailurePattern() {
+  for (int i = 0; i < NUM_LEDS; i++) {
+    if (i % 4 == 0) leds[i] = 0x080808;
+    else leds[i] = 0x000000;
   }
+  FastLED.show();
+  delay(5);
+
+  for (int i = 0; i < NUM_LEDS; i++) {
+    if (i % 4 == 0) leds[i] = 0x202020;
+    else leds[i] = 0x000000;
+  }
+  FastLED.show();
+  delay(5);
+
+  for (int i = 0; i < NUM_LEDS; i++) {
+    if (i % 4 == 0) leds[i] = 0x404040;
+    else leds[i] = 0x000000;
+  }
+  FastLED.show();
+  delay(5);
+
+  for (int i = 0; i < NUM_LEDS; i++) {
+    if (i % 4 == 0) leds[i] = 0x808080;
+    else leds[i] = 0x000000;
+  }
+  FastLED.show();
+  delay(5);
+
+  for (int i = 0; i < NUM_LEDS; i++) {
+    if (i % 4 == 0) leds[i] = 0x404040;
+    else leds[i] = 0x000000;
+  }
+  FastLED.show();
+  delay(5);
+
+  for (int i = 0; i < NUM_LEDS; i++) {
+    if (i % 4 == 0) leds[i] = 0x202020;
+    else leds[i] = 0x000000;
+  }
+  FastLED.show();
+  delay(5);
+
+  for (int i = 0; i < NUM_LEDS; i++) {
+    if (i % 4 == 0) leds[i] = 0x080808;
+    else leds[i] = 0x000000;
+  }
+  FastLED.show();
+  delay(5);
 }
 
 bool checkFireballThreshold(GyroData gData) {
@@ -216,9 +261,6 @@ void loop() {
   // start event timers
   unsigned long currentTime = millis();
   bool thresh_met = false;
-  imu.update();
-  imu.getAccel(&a);
-  imu.getGyro(&g);
 
   if (currentTime - prev_currentTime >= STATE_POLLING_TIME) {
     // Check power toggle at all times
@@ -267,9 +309,12 @@ void loop() {
       updateDisplay(thresh_met, a, g);
       while (millis() - actionTime <= ACTION_TIMEOUT) {
         delay(10); // debounce
+        imu.update();
+        imu.getAccel(&a);
+        imu.getGyro(&g);
         if (digitalRead(FIREBALL_PIN) == HIGH && checkFireballThreshold(g)) {
           // mp3.playTrackNumber(4, 30);  // Play success sound
-          runLEDAnimation(CRGB::Green);
+          showSuccessPattern(CRGB::Green);
           level++;
           currentState = ACTION_SELECT_STATE;
           thresh_met = true;
@@ -282,7 +327,7 @@ void loop() {
         health--;
         thresh_met = false;
         updateDisplay(thresh_met, a, g);
-        showFailurePattern(CRGB::Blue);
+        showFailurePattern();
       }
       // Check for Health Status and advance state
       if (health <= 0) currentState = START_STATE;
@@ -292,9 +337,12 @@ void loop() {
       updateDisplay(thresh_met, a, g);
       while (millis() - actionTime <= ACTION_TIMEOUT) {
         delay(10);  // Debounce
+        imu.update();
+        imu.getAccel(&a);
+        imu.getGyro(&g);
         if (abs(a.accelY) > THRUST_THRESHOLD) {
           // mp3.playTrackNumber(4, 30);  // Play success sound
-          runLEDAnimation(CRGB::Red);
+          showSuccessPattern(CRGB::Red);
           level++;
           currentState = ACTION_SELECT_STATE;
           thresh_met = true;
@@ -307,17 +355,39 @@ void loop() {
         health--;
         thresh_met = false;
         updateDisplay(thresh_met, a, g);
-        showFailurePattern(CRGB::Orange);
+        showFailurePattern();
       }
       // Check for Health Status and advance state
       if (health <= 0) currentState = START_STATE;
       else currentState = ACTION_SELECT_STATE;
 
     } else if (currentState == SWING_STATE) {
-      if (abs(a.accelZ) > SWING_THRESHOLD) thresh_met = true;
-      else thresh_met = false;
-      // updateDisplay(thresh_met, a, g);
-      delay(10);
+      updateDisplay(thresh_met, a, g);
+      while (millis() - actionTime <= ACTION_TIMEOUT) {
+        delay(10);  // Debounce
+        imu.update();
+        imu.getAccel(&a);
+        imu.getGyro(&g);
+        if (abs(a.accelZ) > SWING_THRESHOLD) {
+          // mp3.playTrackNumber(4, 30);  // Play success sound
+          showSuccessPattern(CRGB::Red);
+          level++;
+          currentState = ACTION_SELECT_STATE;
+          thresh_met = true;
+          ACTION_SUCCESS = true;
+          break;
+        }
+      }
+      // mp3.playTrackNumber(5, 30);  // Play failure sound
+      if (!ACTION_SUCCESS) {
+        health--;
+        thresh_met = false;
+        updateDisplay(thresh_met, a, g);
+        showFailurePattern();
+      }
+      // Check for Health Status and advance state
+      if (health <= 0) currentState = START_STATE;
+      else currentState = ACTION_SELECT_STATE;
     } else {
       level = 111;
       health = -111;
