@@ -1,12 +1,11 @@
 // INCLUDES
-#include <Wire.h>                 // For I2C communication devices
-#include <SPI.h>                  // For SPI communication devices
-#include <Adafruit_GFX.h>         // For graphics on OLED
-#include <Adafruit_SSD1306.h>     // For the OLED itself
-#include <FastLED.h>              // For the LED Light Strip
-#include <FastIMU.h>              // For Grabbing IMU data off I2C
-#include <SoftwareSerial.h>       // For RX / TX
-#include <DFRobotDFPlayerMini.h>  // For DF Player
+#include <Wire.h>             // For I2C communication devices
+#include <SPI.h>              // For SPI communication devices
+#include <Adafruit_GFX.h>     // For graphics on OLED
+#include <Adafruit_SSD1306.h> // For the OLED itself
+#include <FastLED.h>          // For the LED Light Strip
+#include <FastIMU.h>          // For Grabbing IMU data off I2C
+#include "mp3tf16p.h"         // For the DFPlayer
 
 // COLOR DEFINITIONS
 // #define WHITE_25 0x202020
@@ -53,10 +52,7 @@ GyroData g;                   // gyro data
 #define FIREBALL_PIN 4   // SW2
 
 // Initialize DFPlayer
-#define RX 0            // RX Pin
-#define TX 1            // TX Pin
-SoftwareSerial mySerial(RX, TX);
-DFRobotDFPlayerMini player;
+// MP3Player mp3(10, 11);  // Using the custom MP3Player class
 
 // GAME STATES
 enum GameState {
@@ -74,7 +70,10 @@ int health = 3;
 int level = 0;
 unsigned long actionTime = 0;
 unsigned long prev_currentTime = 0;
-const unsigned long ACTION_TIMEOUT = 5000;    // 5 seconds in milliseconds
+unsigned long ACTION_TIMEOUT = 5000;    // 5 seconds in milliseconds
+unsigned long total_actions = 1;
+unsigned long action_count = 0;
+float decay_rate = 0.75;
 const unsigned long STATE_POLLING_TIME = 100; // Poll every 0.01 seconds
 bool ACTION_SUCCESS = false;                  // Whether seelected action was performed
 float SWING_THRESHOLD = 2.5;                  // aZ
@@ -159,28 +158,33 @@ void updateDisplay(bool threshold, AccelData accel, GyroData gyro) {
   else if (currentState == SWING_STATE) display.println(F("SWING!")); 
   else display.println(F("INVALID STATE!"));
 
-  // ROW 2 + 3 OLED OUTPUT
-  if (currentState != SWING_STATE && currentState != THRUST_STATE && currentState != FIREBALL_STATE) {
-    display.print(F("Level: ")); display.println(level);
-    display.print(F("Health: ")); display.println(health);
-  } else {
-    // DISPLAY IMU DATA
-    // display.setCursor(0, 8);
-    display.print(accel.accelX); display.print(F(", "));
-    display.print(accel.accelZ); display.print(F(", "));
-    display.println(accel.accelZ);
+  // ROW 2 + 3 + 4 OLED OUTPUT
+  display.print(F("Level: ")); display.println(level);
+  display.print(F("Health: ")); display.println(health);
+  if (threshold) display.println(F("THRESHOLD MET"));
+  else display.println(F("THRESHOLD NOT MET"));
+  delay(5);
+  // if (currentState != SWING_STATE && currentState != THRUST_STATE && currentState != FIREBALL_STATE) {
+  //   display.print(F("Level: ")); display.println(level);
+  //   display.print(F("Health: ")); display.println(health);
+  // } else {
+  //   // DISPLAY IMU DATA
+  //   // display.setCursor(0, 8);
+  //   // display.print(accel.accelX); display.print(F(", "));
+  //   // display.print(accel.accelZ); display.print(F(", "));
+  //   // display.println(accel.accelZ);
 
-    // display.setCursor(0, 16);
-    display.print(gyro.gyroX); display.print(F(", "));
-    display.print(gyro.gyroZ); display.print(F(", "));
-    display.println(gyro.gyroZ);
+  //   // // display.setCursor(0, 16);
+  //   // display.print(gyro.gyroX); display.print(F(", "));
+  //   // display.print(gyro.gyroZ); display.print(F(", "));
+  //   // display.println(gyro.gyroZ);
 
-    // ROW 4 OUTPUT
-    // display.setCursor(0, 24);
-    if (threshold) display.println(F("THRESHOLD MET"));
-    else display.println(F("THRESHOLD NOT MET"));
-    delay(5);
-  }
+  //   // ROW 4 OUTPUT
+  //   // display.setCursor(0, 24);
+  //   if (threshold) display.println(F("THRESHOLD MET"));
+  //   else display.println(F("THRESHOLD NOT MET"));
+  //   delay(5);
+  // }
 
   display.display();
 }
@@ -261,6 +265,15 @@ bool checkFireballThreshold(GyroData gData) {
   }
 }
 
+void updateDifficulty() {
+  if (action_count >= total_actions) {
+    level++;
+    total_actions++;
+    action_count = 0;
+    ACTION_TIMEOUT = (unsigned long) ACTION_TIMEOUT * decay_rate;
+  }
+}
+
 void loop() {
   // start event timers
   unsigned long currentTime = millis();
@@ -285,6 +298,8 @@ void loop() {
     } else if (currentState == START_STATE) {
       health = 3;
       level = 0;
+      action_count = 0;
+      total_actions = 1;
       updateDisplay(thresh_met, a, g);
       while(digitalRead(START_PIN) == LOW) {
         // mp3.playTrackNumber(1, 30);  // Play start sound
@@ -293,6 +308,7 @@ void loop() {
       currentState = ACTION_SELECT_STATE;
 
     } else if (currentState == ACTION_SELECT_STATE) {
+      updateDifficulty();
       updateDisplay(thresh_met, a, g);
       delay(5000);
       int action = random(3);
@@ -319,7 +335,7 @@ void loop() {
         if (digitalRead(FIREBALL_PIN) == HIGH && checkFireballThreshold(g)) {
           // mp3.playTrackNumber(4, 30);  // Play success sound
           showSuccessPattern(CRGB::Green);
-          level++;
+          action_count++;
           currentState = ACTION_SELECT_STATE;
           thresh_met = true;
           ACTION_SUCCESS = true;
@@ -347,7 +363,7 @@ void loop() {
         if (abs(a.accelY) > THRUST_THRESHOLD) {
           // mp3.playTrackNumber(4, 30);  // Play success sound
           showSuccessPattern(CRGB::Red);
-          level++;
+          action_count++;
           currentState = ACTION_SELECT_STATE;
           thresh_met = true;
           ACTION_SUCCESS = true;
@@ -375,7 +391,7 @@ void loop() {
         if (abs(a.accelZ) > SWING_THRESHOLD) {
           // mp3.playTrackNumber(4, 30);  // Play success sound
           showSuccessPattern(CRGB::Red);
-          level++;
+          action_count++;
           currentState = ACTION_SELECT_STATE;
           thresh_met = true;
           ACTION_SUCCESS = true;
