@@ -3,12 +3,11 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <FastLED.h>
-#include "SoftwareSerial.h"
-#include "DFRobotDFPlayerMini.h"
+#include "mp3tf16p.h"
 
 // OLED CONFIGURATION
 #define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
+#define SCREEN_HEIGHT 32
 #define OLED_MOSI  11    // SPI MOSI
 #define OLED_CLK   13    // SPI SCK
 #define OLED_DC    8     // Data/Command
@@ -25,15 +24,10 @@ CRGB leds[NUM_LEDS];
 #define START_PIN 4
 #define FIREBALL_PIN 7
 
-// DFPlayer pins
-#define DFPLAYER_RX 5
-#define DFPLAYER_TX 3
-
 // Initialize Objects
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT,
   OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
-SoftwareSerial mySoftwareSerial(DFPLAYER_RX, DFPLAYER_TX); // RX, TX
-DFRobotDFPlayerMini myDFPlayer;
+MP3Player mp3(10, 11);  // Using the custom MP3Player class
 
 // GAME STATES
 enum GameState {
@@ -50,6 +44,7 @@ int health = 3;
 int level = 0;
 unsigned long actionTimer = 0;
 const unsigned long ACTION_TIMEOUT = 5000; // 5 seconds in milliseconds
+bool ACTION_SUCCESS = false;
 
 void setup() {
   // Initialize pins
@@ -65,14 +60,8 @@ void setup() {
   // Initialize Serial for debugging
   Serial.begin(9600);
   
-  // Initialize DFPlayer
-  mySoftwareSerial.begin(9600);
-  if (!myDFPlayer.begin(mySoftwareSerial)) {
-    Serial.println(F("DFPlayer Mini failed!"));
-    while(true);
-  }
-  myDFPlayer.setTimeOut(500);
-  myDFPlayer.volume(30);  // Set volume (0-30)
+  // Initialize MP3 player
+  // mp3.initialize();
   
   // Initialize display with SPI
   if(!display.begin(SSD1306_SWITCHCAPVCC)) {
@@ -91,25 +80,22 @@ void updateDisplay() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   display.setTextSize(1);
-  
-  if (currentState == START_STATE) {
-    display.setCursor(40, 20);
-    display.println(F("START"));
-    display.setCursor(30, 35);
-    display.print(F("Level: "));
-    display.println(level);
-    display.setCursor(30, 45);
-    display.print(F("Health: "));
-    display.println(health);
+  display.setCursor(0,0);
+  if (currentState == MENU_STATE) display.println(F("MENU"));
+  else if (currentState == START_STATE) display.println(F("START"));
+  else if (currentState == ACTION_SELECT_STATE) display.println(F("ACTION SELECT"));
+  else if (currentState == FIREBALL_STATE) display.println(F("FIREBALL"));
+  else if (currentState == START_BUTTON_STATE) display.println(F("START_BUTTON"));
+  else display.println(F("INVALID STATE!"));
+  display.print(F("Level: ")); display.println(level);
+  display.print(F("Health: ")); display.println(health);
+  if (currentState == FIREBALL_STATE) {
+    display.println(F("SHOOT FIREBALL!"));
+  } else if(currentState == START_BUTTON_STATE) {
+    display.println(F("PRESS START BUTTON!"));
   } else {
-    display.setCursor(30, 25);
-    display.print(F("Level: "));
-    display.println(level);
-    display.setCursor(30, 35);
-    display.print(F("Health: "));
-    display.println(health);
+    display.println(F("NA"));
   }
-  
   display.display();
 }
 
@@ -123,19 +109,22 @@ void runLEDAnimation(CRGB color) {
       }
     }
     FastLED.show();
-    delay(5);
+    delay(10);
   }
 }
 
 void showFailurePattern(CRGB color) {
-  for (int i = 0; i < NUM_LEDS; i += 2) {
-    leds[i] = color;
-    leds[i + 1] = CRGB::Black;
+  for (int i = -4; i < NUM_LEDS; i++) {
+    for (int j = 0; j < NUM_LEDS; j++) {
+      if (j >= i && j < i + 5) {
+        leds[j] = color;
+      } else {
+        leds[j] = CRGB::Black;
+      }
+    }
+    FastLED.show();
+    delay(10);
   }
-  FastLED.show();
-  delay(500);
-  FastLED.clear();
-  FastLED.show();
 }
 
 void loop() {
@@ -144,99 +133,104 @@ void loop() {
     currentState = MENU_STATE;
   }
 
-  switch (currentState) {
-    case MENU_STATE:
-      FastLED.clear();
-      FastLED.show();
-      display.clearDisplay();
-      display.setTextSize(2);
-      display.setTextColor(SSD1306_WHITE);
-      display.setCursor(20, 25);
-      display.println(F("MENU"));
-      display.display();
-      myDFPlayer.play(1);  // Play track 1 (menu sound)
-      while (digitalRead(POWER_PIN) == LOW) {
-        delay(100);  // Wait for toggle to be set to HIGH
-      }
-      currentState = START_STATE;
-      break;
+  if (currentState == MENU_STATE) {
+    FastLED.clear();
+    FastLED.show();
+    updateDisplay();
+    // mp3.playTrackNumber(0, 30);  // Play menu sound
+    while (digitalRead(POWER_PIN) == LOW) {
+      delay(100);  // Wait for toggle to be set to HIGH
+    }
+    currentState = START_STATE;
+  
+  } else if (currentState == START_STATE) {
+    health = 3;
+    level = 0;
+    updateDisplay();
+    while(digitalRead(START_PIN) == LOW) {
+      // mp3.playTrackNumber(1, 30);  // Play start sound
+      delay(100);  // Debounce
+    }
+    currentState = ACTION_SELECT_STATE;
 
-    case START_STATE:
-      health = 3;
-      level = 0;
+  } else if (currentState == ACTION_SELECT_STATE) {
+    updateDisplay();
+    delay(1000);
+    // Randomly select next action
+    if (random(2) == 0) {
+      currentState = FIREBALL_STATE;
+      // mp3.playTrackNumber(2, 30);  // Play fireball prompt
+      // display.clearDisplay();
+      // display.setTextSize(1);
+      // display.setTextColor(SSD1306_WHITE);
+      // display.setCursor(0, 0);
+      // display.println(F("SHOOT FIREBALL!"));
+      // display.display();
+    } else {
+      currentState = START_BUTTON_STATE;
+      // mp3.playTrackNumber(3, 30);  // Play start button prompt
+      // display.clearDisplay();
+      // display.setTextSize(1);
+      // display.setTextColor(SSD1306_WHITE);
+      // display.setCursor(0, 0);
+      // display.println(F("HIT START BUTTON!"));
+      // display.display();
+    }
+    ACTION_SUCCESS = false;
+    actionTimer = millis();  // Start the timer
+    
+
+  } else if (currentState == FIREBALL_STATE) {
+    updateDisplay();
+    while (millis() - actionTimer <= ACTION_TIMEOUT) {
+      if (digitalRead(FIREBALL_PIN) == HIGH) {
+        // mp3.playTrackNumber(4, 30);  // Play success sound
+        runLEDAnimation(CRGB::Red);
+        level++;
+        currentState = ACTION_SELECT_STATE;
+        ACTION_SUCCESS = true;
+        delay(100);  // Debounce
+      }
+    }
+    // mp3.playTrackNumber(5, 30);  // Play failure sound
+    if (!ACTION_SUCCESS) {
+      health--;
       updateDisplay();
-      if (digitalRead(START_PIN) == HIGH) {
-        myDFPlayer.play(2);  // Play track 2 (start sound)
-        delay(500);  // Debounce
+      showFailurePattern(CRGB::Blue);
+      if (health <= 0) {
+        currentState = START_STATE;
+      } else {
         currentState = ACTION_SELECT_STATE;
       }
-      break;
+      delay(1000);
+    }
 
-    case ACTION_SELECT_STATE:
+  } else if (currentState == START_BUTTON_STATE) {
+    updateDisplay();
+    while (millis() - actionTimer <= ACTION_TIMEOUT) {
+      if (digitalRead(START_PIN) == HIGH) {
+        // mp3.playTrackNumber(4, 30);  // Play success sound
+        runLEDAnimation(CRGB::Green);
+        level++;
+        currentState = ACTION_SELECT_STATE;
+        ACTION_SUCCESS = true;
+        delay(100);  // Debounce
+      }
+    }
+    // mp3.playTrackNumber(5, 30);  // Play failure sound
+    if (!ACTION_SUCCESS) {
+      health--;
       updateDisplay();
-      // Randomly select next action
-      if (random(2) == 0) {
-        currentState = FIREBALL_STATE;
-        myDFPlayer.play(3);  // Play track 3 (fireball prompt)
-        display.clearDisplay();
-        display.setTextSize(2);
-        display.setTextColor(SSD1306_WHITE);
-        display.setCursor(10, 25);
-        display.println(F("FIREBALL!"));
-        display.display();
+      showFailurePattern(CRGB::Orange);
+      if (health <= 0) {
+        currentState = START_STATE;
       } else {
-        currentState = START_BUTTON_STATE;
-        myDFPlayer.play(4);  // Play track 4 (start button prompt)
-        display.clearDisplay();
-        display.setTextSize(2);
-        display.setTextColor(SSD1306_WHITE);
-        display.setCursor(20, 25);
-        display.println(F("START!"));
-        display.display();
+        currentState = ACTION_SELECT_STATE;
       }
-      actionTimer = millis();  // Start the timer
-      break;
-
-    case FIREBALL_STATE:
-      if (millis() - actionTimer <= ACTION_TIMEOUT) {
-        if (digitalRead(FIREBALL_PIN) == HIGH) {
-          myDFPlayer.play(5);  // Play track 5 (success sound)
-          runLEDAnimation(CRGB::Red);
-          level++;
-          currentState = ACTION_SELECT_STATE;
-          delay(500);  // Debounce
-        }
-      } else {
-        myDFPlayer.play(6);  // Play track 6 (failure sound)
-        showFailurePattern(CRGB::Blue);
-        health--;
-        if (health <= 0) {
-          currentState = START_STATE;
-        } else {
-          currentState = ACTION_SELECT_STATE;
-        }
-      }
-      break;
-
-    case START_BUTTON_STATE:
-      if (millis() - actionTimer <= ACTION_TIMEOUT) {
-        if (digitalRead(START_PIN) == HIGH) {
-          myDFPlayer.play(5);  // Play track 5 (success sound)
-          runLEDAnimation(CRGB::Green);
-          level++;
-          currentState = ACTION_SELECT_STATE;
-          delay(500);  // Debounce
-        }
-      } else {
-        myDFPlayer.play(6);  // Play track 6 (failure sound)
-        showFailurePattern(CRGB::Purple);
-        health--;
-        if (health <= 0) {
-          currentState = START_STATE;
-        } else {
-          currentState = ACTION_SELECT_STATE;
-        }
-      }
-      break;
+      delay(1000);
+    }
+  } else {
+    level = 111;
+    health = -111;
   }
 }
