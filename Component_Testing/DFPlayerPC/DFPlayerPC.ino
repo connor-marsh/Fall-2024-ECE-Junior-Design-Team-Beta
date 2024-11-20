@@ -1,6 +1,6 @@
 #include "mp3tf16p.h"
 
-MP3Player mp3(0,1);
+MP3Player mp3(3, 2);
 
 void setup() {
   Serial.begin(9600);

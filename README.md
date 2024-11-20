@@ -1,1 +1,0 @@
-# Fall-2024-ECE-Junior-Design-Team-Beta

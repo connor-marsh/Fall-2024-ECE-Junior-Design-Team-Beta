@@ -5,21 +5,13 @@
 #include <Adafruit_SSD1306.h> // For the OLED itself
 #include <FastLED.h>          // For the LED Light Strip
 #include <FastIMU.h>          // For Grabbing IMU data off I2C
-#include "mp3tf16p.h"         // For the DFPlayer
-
-// COLOR DEFINITIONS
-// #define WHITE_25 0x202020
-// #define WHITE_50 0x303030
-// #define WHITE_MAX 0xFFFFFF
-// #define RED_50 0x000030
-// #define RED_MAX 0x0000FF
-// #define BLUE_50 0x300000
-// #define BLUE_MAX 0xFF0000
+#include "SoftwareSerial.h"   // For the DFPlayer
+#include "DFRobotDFPlayerMini.h" // For the DFPlayer
 
 // OLED CONFIGURATION
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 32
-#define OLED_RESET -1
+// #define OLED_RESET -1
 #define OLED_MOSI  11     // SPI MOSI
 #define OLED_CLK   13     // SPI SCK
 #define OLED_DC    8      // Data/Command
@@ -29,7 +21,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT,
   OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
 
 // LED STRIP CONFIGURATION
-#define NUM_LEDS 144
+#define NUM_LEDS 100
 #define DATA_PIN 6
 CRGB leds[NUM_LEDS];
 
@@ -47,16 +39,18 @@ AccelData a;                  // accelerometer data
 GyroData g;                   // gyro data
 
 // PIN DEFINITIONS
-#define POWER_PIN 2      // Toggle switch
+#define DF_TX_PIN 2      // DFPlayer TX Pin
+#define DF_RX_PIN 3      // DFPlayer RX Pin
 #define START_PIN 7      // SW1 
 #define FIREBALL_PIN 4   // SW2
 
 // Initialize DFPlayer
-// MP3Player mp3(10, 11);  // Using the custom MP3Player class
+SoftwareSerial swSerial(DF_RX_PIN, DF_TX_PIN); // RX, TX
+DFRobotDFPlayerMini player;
 
 // GAME STATES
 enum GameState {
-  MENU_STATE,
+  // MENU_STATE,
   START_STATE,
   ACTION_SELECT_STATE,
   FIREBALL_STATE,
@@ -65,7 +59,7 @@ enum GameState {
 };
 
 // GAME VARIABLES
-GameState currentState = MENU_STATE;
+GameState currentState = START_STATE;
 int health = 3;
 int level = 0;
 unsigned long actionTime = 0;
@@ -80,6 +74,18 @@ float SWING_THRESHOLD = 2.5;                  // aZ
 float THRUST_THRESHOLD = 1.5;                 // aY
 float ORIENT_THRESHOLD = 30;                  // gX/gY/gZ
 
+// SOUND MAP
+#define HEY 1
+#define LISTEN 2
+#define THEME 3
+#define HURT 9
+#define THRUST 10 
+#define SWING 11
+#define FIRE 12
+#define SUCCESS 13
+#define LEVEL_UP 14
+#define DEATH 15
+
 void setup() {
   // Initialize Serial for debugging
   Serial.begin(9600);
@@ -91,17 +97,14 @@ void setup() {
   Wire.begin();
   
   // Initialize pins
-  pinMode(POWER_PIN, INPUT);
+  // pinMode(POWER_PIN, INPUT);
   pinMode(START_PIN, INPUT);
   pinMode(FIREBALL_PIN, INPUT);
   
   // Initialize LED strip
-  FastLED.addLeds<WS2812B, DATA_PIN, RGB>(leds, NUM_LEDS);
+  FastLED.addLeds<WS2812B, DATA_PIN, RGB>(leds, NUM_LEDS/2);
   FastLED.clear();
   FastLED.show();
-
-  // Initialize MP3 player
-  // mp3.initialize();
   
   // Initialize OLED display with SPI
   if(!display.begin(SSD1306_SWITCHCAPVCC)) {
@@ -114,7 +117,33 @@ void setup() {
   display.setCursor(0,0);
   display.println(F("Initializing..."));
   display.display();
-  delay(2000);
+  delay(1000);
+
+  // Initialize MP3 player
+  display.println(F("Starting DFPlayer..."));
+  display.display();
+  swSerial.begin(9600);
+  if (!player.begin(swSerial)) {  //Use softwareSerial to communicate with mp3.
+    display.clearDisplay();
+    display.println(F("Unable to begin:"));
+    display.println(F("1.check connection"));
+    display.println(F("2.insert SD card!"));
+    while(true);
+  }
+  display.println(F("DFPlayer Mini online."));
+  display.display();
+  player.volume(30);
+  // player.play(HEY); delay(10000); // Hey!
+  // player.play(LISTEN); delay(10000); // Listen!
+  // player.play(THEME); delay(10000); // Theme
+  // player.play(HURT); delay(10000); // Really Hurt
+  // player.play(THRUST); delay(10000); // Thrust!
+  // player.play(SWING); delay(10000);// Swing!
+  // player.play(FIRE); delay(10000);// Fireball!
+  // player.play(SUCCESS); delay(10000); // Action Complete!
+  // player.play(LEVEL_UP); delay(10000);// Level Up!
+  // player.play(DEATH); delay(10000); // Dead Theme (Zelda's Lullaby)
+  delay(3000);
 
   // Initialize IMU
   int err = imu.init(calibrationData, IMU_ADDRESS);
@@ -124,7 +153,7 @@ void setup() {
     display.print(F("IMU Error: "));
     display.println(err);
     display.display();
-    Serial.print("IMU Error: "); Serial.println(err);
+    // Serial.print("IMU Error: "); Serial.println(err);
     for(;;);
   }
 
@@ -150,8 +179,8 @@ void updateDisplay(bool threshold, AccelData accel, GyroData gyro) {
   
   // ROW 1 OLED OUTPUT
   display.setCursor(0,0);
-  if (currentState == MENU_STATE) display.println(F("MENU"));
-  else if (currentState == START_STATE) display.println(F("START"));
+  // if (currentState == MENU_STATE) display.println(F("MENU"));
+  if (currentState == START_STATE) display.println(F("START"));
   else if (currentState == ACTION_SELECT_STATE) display.println(F("ACTION SELECT"));
   else if (currentState == FIREBALL_STATE) display.println(F("FIREBALL!"));
   else if (currentState == THRUST_STATE) display.println(F("THRUST!"));
@@ -161,8 +190,8 @@ void updateDisplay(bool threshold, AccelData accel, GyroData gyro) {
   // ROW 2 + 3 + 4 OLED OUTPUT
   display.print(F("Level: ")); display.println(level);
   display.print(F("Health: ")); display.println(health);
-  if (threshold) display.println(F("THRESHOLD MET"));
-  else display.println(F("THRESHOLD NOT MET"));
+  // if (threshold) display.println(F("THRESHOLD MET"));
+  // else display.println(F("THRESHOLD NOT MET"));
   delay(5);
   // if (currentState != SWING_STATE && currentState != THRUST_STATE && currentState != FIREBALL_STATE) {
   //   display.print(F("Level: ")); display.println(level);
@@ -195,8 +224,10 @@ void showSuccessPattern(CRGB color) {
     for (int j = 0; j < NUM_LEDS; j++) {
       if (j >= i && j < i + LED + 1) {
         leds[j] = color;
+        // leds[NUM_LEDS-j] = color;
       } else {
         leds[j] = CRGB::Black;
+        // leds[NUM_LEDS-j] = CRGB::Black;
       }
     }
     FastLED.show();
@@ -205,54 +236,18 @@ void showSuccessPattern(CRGB color) {
 }
 
 void showFailurePattern() {
-  for (int i = 0; i < NUM_LEDS; i++) {
-    if (i % 4 == 0) leds[i] = 0x080808;
-    else leds[i] = 0x000000;
+  const int FADE_CYCLES = 10;
+  unsigned long brightness = 0x08080808; 
+  for (int c = 0; c < FADE_CYCLES; c++){
+    for (int i = 0; i < NUM_LEDS; i++) {
+      if (i % 5 == 0) leds[i] = brightness;
+      else leds[i] = 0x000000;
+    }
+    FastLED.show();
+    delay(100);
+    if (c < (FADE_CYCLES / 2)) brightness += 0x01010101;
+    else brightness -= 0x01010101;
   }
-  FastLED.show();
-  delay(5);
-
-  for (int i = 0; i < NUM_LEDS; i++) {
-    if (i % 4 == 0) leds[i] = 0x202020;
-    else leds[i] = 0x000000;
-  }
-  FastLED.show();
-  delay(5);
-
-  for (int i = 0; i < NUM_LEDS; i++) {
-    if (i % 4 == 0) leds[i] = 0x404040;
-    else leds[i] = 0x000000;
-  }
-  FastLED.show();
-  delay(5);
-
-  for (int i = 0; i < NUM_LEDS; i++) {
-    if (i % 4 == 0) leds[i] = 0x808080;
-    else leds[i] = 0x000000;
-  }
-  FastLED.show();
-  delay(5);
-
-  for (int i = 0; i < NUM_LEDS; i++) {
-    if (i % 4 == 0) leds[i] = 0x404040;
-    else leds[i] = 0x000000;
-  }
-  FastLED.show();
-  delay(5);
-
-  for (int i = 0; i < NUM_LEDS; i++) {
-    if (i % 4 == 0) leds[i] = 0x202020;
-    else leds[i] = 0x000000;
-  }
-  FastLED.show();
-  delay(5);
-
-  for (int i = 0; i < NUM_LEDS; i++) {
-    if (i % 4 == 0) leds[i] = 0x080808;
-    else leds[i] = 0x000000;
-  }
-  FastLED.show();
-  delay(5);
 }
 
 bool checkFireballThreshold(GyroData gData) {
@@ -271,7 +266,19 @@ void updateDifficulty() {
     total_actions++;
     action_count = 0;
     ACTION_TIMEOUT = (unsigned long) ACTION_TIMEOUT * decay_rate;
+    player.play(LEVEL_UP); delay(10000);
   }
+}
+
+void loseLife(bool thresh_met) {
+  health--;
+  thresh_met = false;
+  player.play(HURT); delay(12000);
+}
+
+void loseGame() {
+  currentState = START_STATE;
+  player.play(DEATH); delay(20000);
 }
 
 void loop() {
@@ -280,27 +287,14 @@ void loop() {
   bool thresh_met = false;
 
   if (currentTime - prev_currentTime >= STATE_POLLING_TIME) {
-    // Check power toggle at all times
-    if (digitalRead(POWER_PIN) == LOW) {
-      currentState = MENU_STATE;
-    }
-
-    if (currentState == MENU_STATE) {
-      FastLED.clear();
-      FastLED.show();
-      updateDisplay(thresh_met, a, g);
-      // mp3.playTrackNumber(0, 30);  // Play menu sound
-      while (digitalRead(POWER_PIN) == LOW) {
-        delay(100);  // Wait for toggle to be set to HIGH
-      }
-      currentState = START_STATE;
     
-    } else if (currentState == START_STATE) {
+    if (currentState == START_STATE) {
       health = 3;
       level = 0;
       action_count = 0;
       total_actions = 1;
       updateDisplay(thresh_met, a, g);
+      player.play(THEME); delay(20000);
       while(digitalRead(START_PIN) == LOW) {
         // mp3.playTrackNumber(1, 30);  // Play start sound
         delay(100);  // Debounce
@@ -310,47 +304,50 @@ void loop() {
     } else if (currentState == ACTION_SELECT_STATE) {
       updateDifficulty();
       updateDisplay(thresh_met, a, g);
-      delay(5000);
+      player.play(HEY); delay(2000);
+      player.play(LISTEN); delay(2000);
       int action = random(3);
       // Randomly select next action
       if (action == 0) {
-        currentState = FIREBALL_STATE;
-        // mp3.playTrackNumber(2, 30);  // Play fireball prompt
+        currentState = FIREBALL_STATE;\
+        player.play(FIRE);
       } else if (action == 1 ){
         currentState = SWING_STATE;
-        // mp3.playTrackNumber(3, 30);  // Play start button prompt
+        player.play(SWING);
       } else {
         currentState = THRUST_STATE;
+        player.play(THRUST);
       }
       ACTION_SUCCESS = false;
+      delay(2000);
       actionTime = millis();  // Start the timer
 
     } else if (currentState == FIREBALL_STATE) {
       updateDisplay(thresh_met, a, g);
       while (millis() - actionTime <= ACTION_TIMEOUT) {
-        delay(10); // debounce
+        delay(11); // debounce
         imu.update();
         imu.getAccel(&a);
         imu.getGyro(&g);
         if (digitalRead(FIREBALL_PIN) == HIGH && checkFireballThreshold(g)) {
           // mp3.playTrackNumber(4, 30);  // Play success sound
-          showSuccessPattern(CRGB::Green);
+          showSuccessPattern(CRGB::White);
           action_count++;
           currentState = ACTION_SELECT_STATE;
           thresh_met = true;
           ACTION_SUCCESS = true;
+          player.play(SUCCESS); delay(10000);
           break;
         }
       }
       // mp3.playTrackNumber(5, 30);  // Play failure sound
       if (!ACTION_SUCCESS) {
-        health--;
-        thresh_met = false;
         updateDisplay(thresh_met, a, g);
         showFailurePattern();
+        loseLife(&thresh_met);
       }
       // Check for Health Status and advance state
-      if (health <= 0) currentState = START_STATE;
+      if (health <= 0) loseGame();
       else currentState = ACTION_SELECT_STATE;
 
     } else if (currentState == THRUST_STATE) {
@@ -360,25 +357,25 @@ void loop() {
         imu.update();
         imu.getAccel(&a);
         imu.getGyro(&g);
-        if (abs(a.accelY) > THRUST_THRESHOLD) {
+        if (abs(a.accelZ) > THRUST_THRESHOLD) {
           // mp3.playTrackNumber(4, 30);  // Play success sound
-          showSuccessPattern(CRGB::Red);
+          showSuccessPattern(CRGB::White);
           action_count++;
           currentState = ACTION_SELECT_STATE;
           thresh_met = true;
           ACTION_SUCCESS = true;
+          player.play(SUCCESS); delay(10000);
           break;
         }
       }
       // mp3.playTrackNumber(5, 30);  // Play failure sound
       if (!ACTION_SUCCESS) {
-        health--;
-        thresh_met = false;
         updateDisplay(thresh_met, a, g);
         showFailurePattern();
+        loseLife(&thresh_met);
       }
       // Check for Health Status and advance state
-      if (health <= 0) currentState = START_STATE;
+      if (health <= 0) loseGame();
       else currentState = ACTION_SELECT_STATE;
 
     } else if (currentState == SWING_STATE) {
@@ -388,25 +385,24 @@ void loop() {
         imu.update();
         imu.getAccel(&a);
         imu.getGyro(&g);
-        if (abs(a.accelZ) > SWING_THRESHOLD) {
+        if (abs(a.accelX) > SWING_THRESHOLD) {
           // mp3.playTrackNumber(4, 30);  // Play success sound
-          showSuccessPattern(CRGB::Red);
+          showSuccessPattern(CRGB::White);
           action_count++;
           currentState = ACTION_SELECT_STATE;
           thresh_met = true;
           ACTION_SUCCESS = true;
+          player.play(SUCCESS); delay(10000); 
           break;
         }
       }
-      // mp3.playTrackNumber(5, 30);  // Play failure sound
       if (!ACTION_SUCCESS) {
-        health--;
-        thresh_met = false;
         updateDisplay(thresh_met, a, g);
         showFailurePattern();
+        loseLife(&thresh_met);
       }
       // Check for Health Status and advance state
-      if (health <= 0) currentState = START_STATE;
+      if (health <= 0) loseGame();
       else currentState = ACTION_SELECT_STATE;
     } else {
       level = 111;
